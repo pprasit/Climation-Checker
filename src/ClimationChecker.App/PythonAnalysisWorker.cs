@@ -103,7 +103,7 @@ internal sealed class PythonAnalysisWorker : IDisposable
 
         var startInfo = new ProcessStartInfo
         {
-            FileName = "python",
+            FileName = ResolvePythonExecutable(),
             WorkingDirectory = _repositoryRoot,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
@@ -127,6 +127,23 @@ internal sealed class PythonAnalysisWorker : IDisposable
         {
             throw new InvalidOperationException(BuildWorkerError("Python worker did not become ready."));
         }
+    }
+
+    private string ResolvePythonExecutable()
+    {
+        var configuredPython = Environment.GetEnvironmentVariable("CLIMATION_CHECKER_PYTHON");
+        if (!string.IsNullOrWhiteSpace(configuredPython) && File.Exists(configuredPython))
+        {
+            return configuredPython;
+        }
+
+        var virtualEnvironmentPython = Path.Combine(_repositoryRoot, ".venv", "Scripts", "python.exe");
+        if (File.Exists(virtualEnvironmentPython))
+        {
+            return virtualEnvironmentPython;
+        }
+
+        return "python";
     }
 
     private void PumpWorkerErrorStream(StreamReader errorReader, TaskCompletionSource<bool> readySignal)

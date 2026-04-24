@@ -14,15 +14,24 @@ from climation_checker.acceleration import argmax_position, backend_name
 from climation_checker.fits_inspector import RingMetrics, analyze_rings_array
 
 
+MAX_RING_ANALYSIS_DIMENSION = 1000
+MIN_VIEWER_DETECTION_CONFIDENCE = 0.70
+MIN_VIEWER_THICKNESS_UNIFORMITY = 0.25
+MAX_VIEWER_ELLIPSE_RATIO = 1.35
+
+
 @dataclass
 class ViewerAnalysis:
     source_file: str
     preview_file: str
     crop_data_file: str
+    full_frame_data_file: str
     crop_origin_x: int
     crop_origin_y: int
     crop_width: int
     crop_height: int
+    full_frame_width: int
+    full_frame_height: int
     backend: str
     ring_metrics: dict | None
     error: str | None
@@ -71,7 +80,7 @@ def build_viewer_analysis(
     error: str | None = None
     try:
         _emit_progress(58, "Analyze", "Running donut ring detection on the source ROI.")
-        local_metrics = analyze_rings_array(analysis_data, source_name, progress_callback=_emit_progress)
+        local_metrics = analyze_rings_for_viewer(analysis_data, source_name)
         metrics = replace(
             local_metrics,
             outer_center_x=local_metrics.outer_center_x + analysis_x0,
@@ -79,14 +88,12 @@ def build_viewer_analysis(
             inner_center_x=local_metrics.inner_center_x + analysis_x0,
             inner_center_y=local_metrics.inner_center_y + analysis_y0,
         )
+        if not is_reliable_viewer_detection(metrics):
+            error = "Donut ring was not found in this frame."
+            metrics = None
     except RuntimeError as exc:
         error = str(exc)
-        try:
-            _emit_progress(66, "Analyze", "Retrying on the full frame for maximum reliability.")
-            metrics = analyze_rings_array(data, source_name, progress_callback=_emit_progress)
-            error = None
-        except RuntimeError as full_frame_exc:
-            error = str(full_frame_exc)
+        _emit_progress(76, "Analyze", "Ring detection did not converge; rendering the preview without overlay.")
 
     _emit_progress(80, "Analyze", "Selecting the preview crop around the source.")
     crop_origin_x = analysis_x0
@@ -112,6 +119,9 @@ def build_viewer_analysis(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     crop_data_path = output_dir / f"{source_path.stem}-crop.float32"
+    full_frame_data_path = output_dir / f"{source_path.stem}-full.float32"
+    _emit_progress(84, "Analyze", "Writing the full frame for the C# renderer.")
+    save_crop_data(data, full_frame_data_path)
     _emit_progress(88, "Analyze", "Writing the preview crop for the C# renderer.")
     save_crop_data(preview_data, crop_data_path)
     _emit_progress(92, "Analyze", "Finalizing the analysis payload.")
@@ -120,10 +130,13 @@ def build_viewer_analysis(
         source_file=str(source_path.resolve()),
         preview_file="",
         crop_data_file=str(crop_data_path.resolve()),
+        full_frame_data_file=str(full_frame_data_path.resolve()),
         crop_origin_x=crop_origin_x,
         crop_origin_y=crop_origin_y,
         crop_width=crop_width,
         crop_height=crop_height,
+        full_frame_width=int(data.shape[1]),
+        full_frame_height=int(data.shape[0]),
         backend=backend_name(),
         ring_metrics=None if metrics is None else asdict(metrics),
         error=error,
@@ -154,6 +167,40 @@ def save_crop_data(data: np.ndarray, output_path: Path) -> None:
 
 def locate_primary_source(data: np.ndarray) -> tuple[int, int]:
     return argmax_position(data, sigma=6.0)
+
+
+def is_reliable_viewer_detection(metrics: RingMetrics) -> bool:
+    return (
+        metrics.detection_confidence >= MIN_VIEWER_DETECTION_CONFIDENCE and
+        metrics.thickness_uniformity >= MIN_VIEWER_THICKNESS_UNIFORMITY and
+        metrics.outer_ellipse_ratio <= MAX_VIEWER_ELLIPSE_RATIO and
+        metrics.inner_ellipse_ratio <= MAX_VIEWER_ELLIPSE_RATIO and
+        metrics.outer_radius_px > metrics.inner_radius_px > 0
+    )
+
+
+def analyze_rings_for_viewer(data: np.ndarray, source_name: str) -> RingMetrics:
+    scale = max(data.shape) / MAX_RING_ANALYSIS_DIMENSION
+    if scale <= 1.0:
+        return analyze_rings_array(data, source_name, progress_callback=_emit_progress)
+
+    _emit_progress(56, "Analyze", "Downsampling the source ROI for responsive ring detection.")
+    stride = int(np.ceil(scale))
+    reduced = np.asarray(data[::stride, ::stride], dtype=np.float32)
+    metrics = analyze_rings_array(reduced, source_name, progress_callback=_emit_progress)
+
+    return replace(
+        metrics,
+        outer_center_x=metrics.outer_center_x * stride,
+        outer_center_y=metrics.outer_center_y * stride,
+        inner_center_x=metrics.inner_center_x * stride,
+        inner_center_y=metrics.inner_center_y * stride,
+        center_offset_px=metrics.center_offset_px * stride,
+        outer_radius_px=metrics.outer_radius_px * stride,
+        inner_radius_px=metrics.inner_radius_px * stride,
+        outer_area_px=metrics.outer_area_px * stride * stride,
+        inner_area_px=metrics.inner_area_px * stride * stride,
+    )
 
 
 def _metadata_value(metadata: dict[str, Any], key: str, default: Any | None = None) -> Any:

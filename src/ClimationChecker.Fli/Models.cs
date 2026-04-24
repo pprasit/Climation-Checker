@@ -22,7 +22,8 @@ public sealed record FliCaptureRequest(
     FliFrameType FrameType = FliFrameType.Normal,
     FliReadoutArea? ImageArea = null,
     int TdiRate = 0,
-    int FlushCount = 0);
+    int FlushCount = 0,
+    Action<string>? Diagnostic = null);
 
 public sealed record FliCaptureResult(
     ushort[] Pixels,
@@ -34,6 +35,14 @@ public sealed record FliCaptureResult(
     int HorizontalBin,
     int VerticalBin,
     DateTimeOffset CapturedAtUtc);
+
+public sealed record FliReadoutDimensions(
+    int Width,
+    int HorizontalOffset,
+    int HorizontalBin,
+    int Height,
+    int VerticalOffset,
+    int VerticalBin);
 
 public sealed record FliCameraStatus(
     string SerialNumber,

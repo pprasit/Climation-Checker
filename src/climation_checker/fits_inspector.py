@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import warnings
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import cv2
 import matplotlib.pyplot as plt

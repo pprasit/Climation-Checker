@@ -77,45 +77,98 @@ public sealed class FliCameraConnection : IDisposable
     public FliCaptureResult Capture(FliCaptureRequest request, CancellationToken cancellationToken = default)
     {
         var imageArea = request.ImageArea ?? GetVisibleArea();
+        var driverImageArea = BuildDriverImageArea(imageArea, request.HorizontalBin, request.VerticalBin);
 
+        request.Diagnostic?.Invoke($"SetHorizontalBin({request.HorizontalBin})");
         _sdk.SetHorizontalBin(request.HorizontalBin);
+        request.Diagnostic?.Invoke($"SetVerticalBin({request.VerticalBin})");
         _sdk.SetVerticalBin(request.VerticalBin);
+        request.Diagnostic?.Invoke($"SetFrameType({request.FrameType})");
         _sdk.SetFrameType(request.FrameType);
-        _sdk.SetImageArea(imageArea);
+        request.Diagnostic?.Invoke(
+            $"SetImageArea({driverImageArea.UpperLeftX},{driverImageArea.UpperLeftY},{driverImageArea.LowerRightX},{driverImageArea.LowerRightY}) from requested {imageArea.UpperLeftX},{imageArea.UpperLeftY},{imageArea.LowerRightX},{imageArea.LowerRightY}");
+        _sdk.SetImageArea(driverImageArea);
+        var fallbackWidth = imageArea.Width / Math.Max(request.HorizontalBin, 1);
+        var fallbackHeight = imageArea.Height / Math.Max(request.VerticalBin, 1);
+        var readoutDimensions = _sdk.TryGetReadoutDimensions();
+        var width = fallbackWidth;
+        var height = fallbackHeight;
+        if (readoutDimensions is not null)
+        {
+            request.Diagnostic?.Invoke(
+                $"ReadoutDimensions width={readoutDimensions.Width}, height={readoutDimensions.Height}, hOffset={readoutDimensions.HorizontalOffset}, vOffset={readoutDimensions.VerticalOffset}, hBin={readoutDimensions.HorizontalBin}, vBin={readoutDimensions.VerticalBin}");
+            if (readoutDimensions.Width > 0 && readoutDimensions.Height > 0 &&
+                (readoutDimensions.Width != fallbackWidth || readoutDimensions.Height != fallbackHeight))
+            {
+                request.Diagnostic?.Invoke($"Using requested binned dimensions {fallbackWidth} x {fallbackHeight}; driver dimensions are informational.");
+            }
+        }
+        else
+        {
+            request.Diagnostic?.Invoke($"ReadoutDimensions unavailable. Fallback {width} x {height}");
+        }
+
+        request.Diagnostic?.Invoke($"SetExposureTime({request.ExposureMilliseconds:0} ms)");
         _sdk.SetExposureTime((int)Math.Round(request.ExposureMilliseconds));
+        request.Diagnostic?.Invoke($"SetTdi({request.TdiRate})");
         _sdk.SetTdi(request.TdiRate);
+        request.Diagnostic?.Invoke($"SetFlushCount({request.FlushCount})");
         _sdk.SetFlushCount(request.FlushCount);
+        request.Diagnostic?.Invoke("ExposeFrame()");
         _sdk.ExposeFrame();
 
-        while (!_sdk.IsDownloadReady(out var timeLeftMilliseconds))
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var delay = Math.Clamp(timeLeftMilliseconds, 25, 250);
-            Thread.Sleep(delay);
+            while (!_sdk.IsDownloadReady(out var timeLeftMilliseconds))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var delay = Math.Clamp(timeLeftMilliseconds, 25, 250);
+                Thread.Sleep(delay);
+            }
+
+            request.Diagnostic?.Invoke($"DownloadReady. Grab {width} x {height}, bin {request.HorizontalBin} x {request.VerticalBin}");
+            var pixels = new ushort[width * height];
+            var row = new ushort[width];
+
+            for (var y = 0; y < height; y++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (y == 0 || y == height - 1 || y % 256 == 0)
+                {
+                    request.Diagnostic?.Invoke($"GrabRow {y + 1}/{height}, row width {width}");
+                }
+
+                _sdk.GrabRow(row);
+                Array.Copy(row, 0, pixels, y * width, width);
+            }
+
+            return new FliCaptureResult(
+                pixels,
+                width,
+                height,
+                SerialNumber,
+                ModelName,
+                request.ExposureMilliseconds,
+                request.HorizontalBin,
+                request.VerticalBin,
+                DateTimeOffset.UtcNow);
         }
-
-        var width = imageArea.Width / Math.Max(request.HorizontalBin, 1);
-        var height = imageArea.Height / Math.Max(request.VerticalBin, 1);
-        var pixels = new ushort[width * height];
-        var row = new ushort[width];
-
-        for (var y = 0; y < height; y++)
+        catch (OperationCanceledException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            _sdk.GrabRow(row);
-            Array.Copy(row, 0, pixels, y * width, width);
+            CancelExposure();
+            throw;
         }
+    }
 
-        return new FliCaptureResult(
-            pixels,
-            width,
-            height,
-            SerialNumber,
-            ModelName,
-            request.ExposureMilliseconds,
-            request.HorizontalBin,
-            request.VerticalBin,
-            DateTimeOffset.UtcNow);
+    private static FliReadoutArea BuildDriverImageArea(FliReadoutArea requestedArea, int horizontalBin, int verticalBin)
+    {
+        var safeHorizontalBin = Math.Max(horizontalBin, 1);
+        var safeVerticalBin = Math.Max(verticalBin, 1);
+        return new FliReadoutArea(
+            requestedArea.UpperLeftX,
+            requestedArea.UpperLeftY,
+            requestedArea.UpperLeftX + requestedArea.Width / safeHorizontalBin,
+            requestedArea.UpperLeftY + requestedArea.Height / safeVerticalBin);
     }
 
     public void CancelExposure()

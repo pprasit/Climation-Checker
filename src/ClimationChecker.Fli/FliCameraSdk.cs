@@ -209,6 +209,40 @@ internal sealed class FliCameraSdk : IDisposable
         }
     }
 
+    public FliReadoutDimensions GetReadoutDimensions()
+    {
+        var status = FLIGetReadoutDimensions(
+            _deviceHandle,
+            out var width,
+            out var horizontalOffset,
+            out var horizontalBin,
+            out var height,
+            out var verticalOffset,
+            out var verticalBin);
+        if (status != 0)
+        {
+            throw new Win32Exception(-status);
+        }
+
+        return new FliReadoutDimensions(width, horizontalOffset, horizontalBin, height, verticalOffset, verticalBin);
+    }
+
+    public FliReadoutDimensions? TryGetReadoutDimensions()
+    {
+        try
+        {
+            return GetReadoutDimensions();
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return null;
+        }
+        catch (Win32Exception)
+        {
+            return null;
+        }
+    }
+
     public void CancelExposure()
     {
         var status = FLICancelExposure(_deviceHandle);
@@ -398,6 +432,16 @@ internal sealed class FliCameraSdk : IDisposable
 
     [DllImport(LibraryName)]
     private static extern int FLIGetExposureStatus(IntPtr dev, out int timeleft);
+
+    [DllImport(LibraryName)]
+    private static extern int FLIGetReadoutDimensions(
+        IntPtr dev,
+        out int width,
+        out int horizontalOffset,
+        out int horizontalBin,
+        out int height,
+        out int verticalOffset,
+        out int verticalBin);
 
     [DllImport(LibraryName)]
     private static extern int FLIGrabRow(IntPtr dev, IntPtr buff, int width);

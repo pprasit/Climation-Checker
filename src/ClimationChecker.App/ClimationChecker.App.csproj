@@ -5,9 +5,19 @@
     <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <ApplicationIcon>Assets\app-icon.ico</ApplicationIcon>
+    <AssemblyName>DonutScope</AssemblyName>
+    <Product>DonutScope</Product>
+    <Title>DonutScope</Title>
+    <Description>CCD FLI collimation and donut-ring analysis viewer</Description>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\ClimationChecker.Fli\ClimationChecker.Fli.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="Assets\app-icon.ico" />
+    <Resource Include="Assets\app-icon.ico" />
   </ItemGroup>
 </Project>
